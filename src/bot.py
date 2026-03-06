@@ -15,21 +15,37 @@ from src.translator import translate_text
 logger = logging.getLogger(__name__)
 
 WAITING_LANGUAGE = "waiting_language"
+MAX_FILE_SIZE_MB = 20
+MAX_LANGUAGE_LENGTH = 50
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hola! Soy tu asistente de transcripción de audio.\n\n"
         "Envíame cualquier mensaje de voz o archivo de audio y te lo convierto a texto, "
-        "en cualquier idioma."
+        "en cualquier idioma.\n\n"
+        f"⚠️ Límite: archivos de hasta {MAX_FILE_SIZE_MB}MB."
     )
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    status_msg = await message.reply_text("🎙️ Transcribiendo audio, un momento...")
-
     audio = message.voice or message.audio
+
+    # Validar tamaño de archivo
+    if audio.file_size and audio.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        size_mb = audio.file_size / (1024 * 1024)
+        await message.reply_text(
+            f"❌ El archivo es demasiado grande ({size_mb:.1f}MB). "
+            f"El límite es {MAX_FILE_SIZE_MB}MB."
+        )
+        return
+
+    # Mostrar duración aproximada si está disponible
+    duration = getattr(audio, "duration", None)
+    duration_text = f" (~{duration}s)" if duration else ""
+    status_msg = await message.reply_text(f"🎙️ Transcribiendo audio{duration_text}, un momento...")
+
     file = await audio.get_file()
     file_path = f"temp_{message.chat_id}_{message.message_id}.ogg"
     await file.download_to_drive(file_path)
@@ -80,6 +96,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     language = update.message.text
+
+    # Validar longitud del idioma
+    if len(language) > MAX_LANGUAGE_LENGTH:
+        await update.message.reply_text(
+            f"❌ El idioma introducido es demasiado largo. "
+            f"Escribe simplemente el nombre del idioma (ej: inglés, francés)."
+        )
+        return
+
     text = context.user_data.get("last_transcription", "")
 
     if not text:
