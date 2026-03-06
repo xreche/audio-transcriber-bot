@@ -36,7 +36,6 @@ PRIVACY_NOTICE = (
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info(f"[DEBUG] /start recibido — user_id: {user_id}")
     status = user_status.get(user_id)
 
     if status == "approved":
