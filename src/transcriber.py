@@ -1,25 +1,24 @@
-import asyncio
 import logging
-import whisper
+import os
+from groq import AsyncGroq
 
 logger = logging.getLogger(__name__)
 
-_model = None
+_client = None
 
 
-def _get_model():
-    global _model
-    if _model is None:
-        logger.info("Cargando modelo Whisper (primera vez, puede tardar unos segundos)...")
-        _model = whisper.load_model("base")
-    return _model
-
-
-def _transcribe_sync(file_path: str) -> str:
-    model = _get_model()
-    result = model.transcribe(file_path)
-    return result["text"].strip()
+def _get_client():
+    global _client
+    if _client is None:
+        _client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
+    return _client
 
 
 async def transcribe_audio(file_path: str) -> str:
-    return await asyncio.to_thread(_transcribe_sync, file_path)
+    client = _get_client()
+    with open(file_path, "rb") as f:
+        transcription = await client.audio.transcriptions.create(
+            file=(os.path.basename(file_path), f.read()),
+            model="whisper-large-v3-turbo",
+        )
+    return transcription.text.strip()
