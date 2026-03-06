@@ -14,25 +14,65 @@ from src.translator import translate_text
 
 logger = logging.getLogger(__name__)
 
+WAITING_NAME = "waiting_name"
+WAITING_APPROVAL = "waiting_approval"
 WAITING_LANGUAGE = "waiting_language"
+
 MAX_FILE_SIZE_MB = 20
 MAX_LANGUAGE_LENGTH = 50
 
+# Almacenamiento en memoria
+user_status = {}    # {user_id: "approved" | "pending" | "rejected"}
+pending_users = {}  # {user_id: {"name": str}}
+
+PRIVACY_NOTICE = (
+    "🔒 *Aviso de privacidad*\n\n"
+    "Los audios que envíes serán procesados por *Groq* (empresa con servidores en EEUU) "
+    "para realizar la transcripción. El audio se elimina inmediatamente tras procesarse "
+    "y no se almacena ningún dato de forma permanente.\n\n"
+    "Al continuar aceptas este tratamiento de datos conforme al RGPD."
+)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    logger.info(f"[DEBUG] /start recibido — user_id: {user_id}")
+    status = user_status.get(user_id)
+
+    if status == "approved":
+        await update.message.reply_text("✅ Ya tienes acceso. ¡Envíame un audio!")
+        return
+
+    if status == "pending":
+        await update.message.reply_text("⏳ Tu solicitud ya está pendiente de revisión. Te avisaré cuando sea aprobada.")
+        return
+
     await update.message.reply_text(
-        "👋 Hola! Soy tu asistente de transcripción de audio.\n\n"
-        "Envíame cualquier mensaje de voz o archivo de audio y te lo convierto a texto, "
-        "en cualquier idioma.\n\n"
-        f"⚠️ Límite: archivos de hasta {MAX_FILE_SIZE_MB}MB."
+        f"👋 Hola, soy un asistente de transcripción de audio.\n\n"
+        f"{PRIVACY_NOTICE}\n\n"
+        f"Para acceder necesito saber quién eres. ¿Cuál es tu *nombre y apellidos*?",
+        parse_mode="Markdown",
     )
+    context.user_data["state"] = WAITING_NAME
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    status = user_status.get(user_id)
+
+    if status == "pending":
+        await update.message.reply_text("⏳ Tu solicitud está pendiente de aprobación. Te avisaré cuando sea revisada.")
+        return
+    elif status == "rejected":
+        await update.message.reply_text("❌ Tu solicitud fue denegada. Contacta con el administrador.")
+        return
+    elif status != "approved":
+        await update.message.reply_text("⚠️ Primero debes registrarte. Usa /start.")
+        return
+
     message = update.message
     audio = message.voice or message.audio
 
-    # Validar tamaño de archivo
     if audio.file_size and audio.file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
         size_mb = audio.file_size / (1024 * 1024)
         await message.reply_text(
@@ -41,7 +81,6 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Mostrar duración aproximada si está disponible
     duration = getattr(audio, "duration", None)
     duration_text = f" (~{duration}s)" if duration else ""
     status_msg = await message.reply_text(f"🎙️ Transcribiendo audio{duration_text}, un momento...")
@@ -78,6 +117,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Aprobación/rechazo de acceso (solo admin)
+    if query.data.startswith("approve_") or query.data.startswith("reject_"):
+        admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+        if str(query.from_user.id) != admin_id:
+            await query.answer("No tienes permisos para esto.", show_alert=True)
+            return
+
+        action, target_id = query.data.split("_", 1)
+        target_user_id = int(target_id)
+        name = pending_users.get(target_user_id, {}).get("name", "Usuario desconocido")
+
+        if action == "approve":
+            user_status[target_user_id] = "approved"
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="✅ Tu acceso ha sido aprobado. ¡Ya puedes enviarme audios!",
+            )
+            await query.edit_message_text(f"✅ Acceso aprobado para {name}.")
+        else:
+            user_status[target_user_id] = "rejected"
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="❌ Tu solicitud de acceso ha sido denegada.",
+            )
+            await query.edit_message_text(f"❌ Acceso denegado para {name}.")
+
+        pending_users.pop(target_user_id, None)
+        return
+
+    # Traducción
     if query.data == "no_translate":
         await query.edit_message_text("De acuerdo 👍")
         context.user_data["state"] = None
@@ -92,21 +161,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("state") != WAITING_LANGUAGE:
+    state = context.user_data.get("state")
+
+    # Registro: esperando nombre
+    if state == WAITING_NAME:
+        name = update.message.text.strip()
+
+        if len(name) < 3 or len(name) > 100:
+            await update.message.reply_text("Por favor, introduce un nombre válido (entre 3 y 100 caracteres).")
+            return
+
+        user_id = update.effective_user.id
+        pending_users[user_id] = {"name": name}
+        user_status[user_id] = "pending"
+        context.user_data["state"] = WAITING_APPROVAL
+
+        await update.message.reply_text(
+            f"✅ Gracias, {name}. Tu solicitud ha sido enviada. Te avisaré cuando sea revisada."
+        )
+
+        admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+        keyboard = [[
+            InlineKeyboardButton("✅ Aceptar", callback_data=f"approve_{user_id}"),
+            InlineKeyboardButton("❌ Rechazar", callback_data=f"reject_{user_id}"),
+        ]]
+        await context.bot.send_message(
+            chat_id=admin_id,
+            text=f"🔔 *Nueva solicitud de acceso*\n\nNombre: *{name}*\nUser ID: `{user_id}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    # Registro: esperando aprobación
+    if state == WAITING_APPROVAL:
+        await update.message.reply_text("⏳ Tu solicitud ya está en revisión. Te avisaremos pronto.")
+        return
+
+    # Traducción
+    if state != WAITING_LANGUAGE:
         return
 
     language = update.message.text
 
-    # Validar longitud del idioma
     if len(language) > MAX_LANGUAGE_LENGTH:
         await update.message.reply_text(
-            f"❌ El idioma introducido es demasiado largo. "
-            f"Escribe simplemente el nombre del idioma (ej: inglés, francés)."
+            "❌ El idioma introducido es demasiado largo. Escribe simplemente el nombre (ej: inglés, francés)."
         )
         return
 
     text = context.user_data.get("last_transcription", "")
-
     if not text:
         await update.message.reply_text("No encontré ninguna transcripción reciente. Envía un audio primero.")
         return
@@ -128,8 +232,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def run_bot():
     token = os.getenv("TELEGRAM_TOKEN")
+    admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+
     if not token:
         raise ValueError("TELEGRAM_TOKEN no encontrado en las variables de entorno.")
+    if not admin_id:
+        raise ValueError("ADMIN_TELEGRAM_ID no encontrado en las variables de entorno.")
 
     app = Application.builder().token(token).build()
 
