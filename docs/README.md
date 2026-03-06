@@ -10,10 +10,11 @@
 | [Diagrama de clases](class-diagram.md) | Estructura de módulos, clases y dependencias |
 | [Diagramas de secuencia](sequence-diagrams.md) | Flujo de mensajes entre componentes |
 | [Diagrama de procesos](process-flow.md) | Flujo de ejecución y decisiones del bot |
+| [Disclaimer](disclaimer.md) | Por qué Telegram, verificación de usuarios y marco legal |
 
 ## Visión general del sistema
 
-Audio Transcriber Bot es un bot de Telegram que permite a cualquier usuario transcribir mensajes de voz o archivos de audio a texto en cualquier idioma, con opción de traducción posterior.
+Audio Transcriber Bot es un bot de Telegram que permite a usuarios registrados y aprobados transcribir mensajes de voz o archivos de audio a texto en cualquier idioma, con opción de traducción posterior. El acceso requiere registro y aprobación por parte del administrador.
 
 ### Componentes externos
 

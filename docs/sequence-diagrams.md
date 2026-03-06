@@ -2,9 +2,53 @@
 
 ---
 
-## SD1 — Transcripción de audio
+## SD1 — Registro de usuario nuevo
 
-Flujo completo desde que el usuario envía un audio hasta que recibe la transcripción.
+Flujo completo desde que un nuevo usuario escribe `/start` hasta que recibe la aprobación o rechazo del administrador.
+
+```mermaid
+sequenceDiagram
+    actor Usuario
+    actor Administrador
+    participant Telegram
+    participant Bot
+
+    Usuario->>Telegram: /start
+    Telegram->>Bot: CommandUpdate("start")
+
+    Bot->>Telegram: sendMessage(aviso de privacidad + petición de nombre)
+    Telegram-->>Usuario: Muestra aviso y pide nombre
+
+    Note over Bot: state = WAITING_NAME
+
+    Usuario->>Telegram: Escribe "Nombre Apellidos"
+    Telegram->>Bot: Message(text="Nombre Apellidos")
+
+    Bot->>Telegram: sendMessage("Solicitud enviada, espera revisión")
+    Telegram-->>Usuario: Confirmación de envío
+
+    Note over Bot: user_status = "pending", state = WAITING_APPROVAL
+
+    Bot->>Telegram: sendMessage(admin_id, solicitud + botones Aceptar/Rechazar)
+    Telegram-->>Administrador: Notificación con botones
+
+    Administrador->>Telegram: Pulsa "✅ Aceptar"
+    Telegram->>Bot: CallbackQuery("approve_{user_id}")
+
+    Bot->>Telegram: sendMessage(usuario, "✅ Acceso aprobado")
+    Telegram-->>Usuario: Notificación de aprobación
+
+    Bot->>Telegram: editMessageText(admin, "✅ Acceso aprobado para Nombre Apellidos")
+    Telegram-->>Administrador: Confirmación
+
+    Note over Bot: user_status = "approved"
+```
+
+---
+
+## SD2 — Transcripción de audio
+
+Flujo completo desde que un usuario aprobado envía un audio hasta que recibe la transcripción.
 
 ```mermaid
 sequenceDiagram
@@ -16,7 +60,10 @@ sequenceDiagram
     Usuario->>Telegram: Envía mensaje de voz / archivo de audio
     Telegram->>Bot: Update (VOICE | AUDIO)
 
-    Bot->>Telegram: sendMessage("🎙️ Transcribiendo audio...")
+    Note over Bot: Verifica user_status == "approved"
+    Note over Bot: Verifica file_size <= 20MB
+
+    Bot->>Telegram: sendMessage("🎙️ Transcribiendo audio (~{duración}s)...")
 
     Bot->>Telegram: getFile(file_id)
     Telegram-->>Bot: file_path
@@ -36,9 +83,7 @@ sequenceDiagram
 
 ---
 
-## SD2 — Traducción de transcripción
-
-Flujo desde que el usuario acepta traducir hasta recibir el resultado.
+## SD3 — Traducción de transcripción
 
 ```mermaid
 sequenceDiagram
@@ -58,6 +103,8 @@ sequenceDiagram
     Usuario->>Telegram: Escribe "inglés"
     Telegram->>Bot: Message(text="inglés")
 
+    Note over Bot: Valida len("inglés") <= 50 caracteres
+
     Bot->>Telegram: sendMessage("🌍 Traduciendo al inglés...")
 
     Bot->>Groq LLM: chat.completions.create(model="llama-3.1-8b-instant", prompt)
@@ -71,7 +118,7 @@ sequenceDiagram
 
 ---
 
-## SD3 — Cancelación de traducción
+## SD4 — Cancelación de traducción
 
 ```mermaid
 sequenceDiagram
@@ -90,7 +137,26 @@ sequenceDiagram
 
 ---
 
-## SD4 — Flujo de error en transcripción
+## SD5 — Rechazo por archivo demasiado grande
+
+```mermaid
+sequenceDiagram
+    actor Usuario
+    participant Telegram
+    participant Bot
+
+    Usuario->>Telegram: Envía archivo de audio > 20MB
+    Telegram->>Bot: Update (AUDIO)
+
+    Note over Bot: file_size > 20 * 1024 * 1024
+
+    Bot->>Telegram: sendMessage("❌ El archivo es demasiado grande (X.XMB). Límite: 20MB.")
+    Telegram-->>Usuario: Mensaje de error
+```
+
+---
+
+## SD6 — Error en transcripción
 
 ```mermaid
 sequenceDiagram

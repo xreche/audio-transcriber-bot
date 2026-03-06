@@ -16,7 +16,14 @@ classDiagram
     }
 
     class bot {
+        -WAITING_NAME: str
+        -WAITING_APPROVAL: str
         -WAITING_LANGUAGE: str
+        -MAX_FILE_SIZE_MB: int
+        -MAX_LANGUAGE_LENGTH: int
+        -user_status: dict
+        -pending_users: dict
+        -PRIVACY_NOTICE: str
         +start(update, context)
         +handle_audio(update, context)
         +handle_callback(update, context)
@@ -49,6 +56,7 @@ classDiagram
         +getFile()
         +editMessageText()
         +answerCallbackQuery()
+        +deleteMessage()
     }
 
     main --> bot : llama run_bot()
@@ -67,21 +75,38 @@ classDiagram
 Punto de entrada de la aplicación. Carga las variables de entorno desde `.env`, configura el sistema de logging y arranca el bot.
 
 ### `src/bot.py`
-Núcleo del bot. Registra los handlers de Telegram y gestiona el flujo de conversación mediante `context.user_data`:
+Núcleo del bot. Gestiona el flujo completo de conversación, incluyendo registro de usuarios, aprobación de acceso, transcripción y traducción.
 
-| Variable en `user_data` | Tipo | Descripción |
+**Estado global en memoria:**
+
+| Variable | Tipo | Descripción |
 |---|---|---|
-| `state` | `str \| None` | Estado actual del usuario. `WAITING_LANGUAGE` si espera idioma de traducción |
+| `user_status` | `dict` | `{user_id: "approved" \| "pending" \| "rejected"}` |
+| `pending_users` | `dict` | `{user_id: {"name": str}}` — solicitudes en espera de revisión |
+
+**Estado por conversación (`context.user_data`):**
+
+| Variable | Tipo | Descripción |
+|---|---|---|
+| `state` | `str \| None` | Estado del usuario: `WAITING_NAME`, `WAITING_APPROVAL`, `WAITING_LANGUAGE` o `None` |
 | `last_transcription` | `str` | Última transcripción generada, disponible para traducción |
 
 **Handlers registrados:**
 
 | Handler | Trigger | Función |
 |---|---|---|
-| `CommandHandler("start")` | `/start` | `start()` |
-| `MessageHandler(VOICE \| AUDIO)` | Audio o voz | `handle_audio()` |
-| `CallbackQueryHandler` | Botones inline | `handle_callback()` |
-| `MessageHandler(TEXT)` | Texto libre | `handle_text()` |
+| `CommandHandler("start")` | `/start` | `start()` — aviso de privacidad y flujo de registro |
+| `MessageHandler(VOICE \| AUDIO)` | Audio o voz | `handle_audio()` — valida acceso, tamaño y transcribe |
+| `CallbackQueryHandler` | Botones inline | `handle_callback()` — traducción y aprobación de admin |
+| `MessageHandler(TEXT)` | Texto libre | `handle_text()` — nombre, espera o idioma según estado |
+
+**Variables de entorno requeridas:**
+
+| Variable | Descripción |
+|---|---|
+| `TELEGRAM_TOKEN` | Token del bot (BotFather) |
+| `GROQ_API_KEY` | API key de Groq |
+| `ADMIN_TELEGRAM_ID` | User ID numérico del administrador en Telegram |
 
 ### `src/transcriber.py`
 Gestiona la transcripción de audio. Envía el archivo a la API de Groq (modelo `whisper-large-v3-turbo`) y retorna el texto. El cliente `AsyncGroq` se instancia una sola vez (singleton).

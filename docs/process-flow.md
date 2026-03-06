@@ -1,6 +1,6 @@
 # Diagrama de Procesos
 
-Flujo de ejecución completo del bot, incluyendo decisiones, estados y manejo de errores.
+Flujo de ejecución completo del bot, incluyendo registro de usuarios, validaciones, transcripción, traducción y manejo de errores.
 
 ---
 
@@ -9,67 +9,108 @@ Flujo de ejecución completo del bot, incluyendo decisiones, estados y manejo de
 ```mermaid
 flowchart TD
     A([Inicio]) --> B[Cargar .env\nConfigurar logging]
-    B --> C[Registrar handlers\nde Telegram]
-    C --> D[Iniciar polling\nTelegram API]
-    D --> E{Nuevo mensaje}
+    B --> C[Verificar TELEGRAM_TOKEN\ny ADMIN_TELEGRAM_ID]
+    C --> D[Registrar handlers\nde Telegram]
+    D --> E[Iniciar polling\nTelegram API]
+    E --> F{Nuevo mensaje}
 
-    E -->|/start| F[Enviar mensaje\nde bienvenida]
-    F --> D
+    F -->|/start| G{Estado del usuario}
+    G -->|approved| H[Informar que puede\nenviar audios]
+    G -->|pending| I[Informar que está\nen revisión]
+    G -->|nuevo| J[Mostrar aviso de privacidad\nPedir nombre y apellidos]
+    J --> K[state = WAITING_NAME]
+    H --> E
+    I --> E
+    K --> E
 
-    E -->|Voz o audio| G[Descargar archivo\ntemp_.oga]
-    G --> H{Descarga OK?}
-    H -->|No| I[Notificar error\nal usuario]
-    I --> D
+    F -->|Texto libre| L{state?}
+    L -->|WAITING_NAME| M[Validar nombre\n3-100 caracteres]
+    M -->|Inválido| N[Pedir corrección]
+    N --> E
+    M -->|Válido| O[Guardar en pending_users\nuser_status = pending]
+    O --> P[Notificar al admin\nbotones Aceptar/Rechazar]
+    O --> Q[Informar al usuario\nque espere]
+    P --> E
 
-    H -->|Sí| J[Enviar a\nGroq Whisper API]
-    J --> K{Transcripción OK?}
-    K -->|No| L[Notificar error\nal usuario]
-    L --> M[Eliminar archivo\ntemporal]
-    M --> D
+    L -->|WAITING_APPROVAL| R[Decir que espere]
+    R --> E
 
-    K -->|Sí| N[Enviar transcripción\nal usuario]
-    N --> M
-    N --> O[Preguntar si desea\ntraducir]
-    O --> P{Respuesta}
+    L -->|WAITING_LANGUAGE| S[Validar idioma\nmáx 50 caracteres]
+    S -->|Inválido| T[Mensaje de error]
+    T --> E
+    S -->|Válido| U[Enviar a Groq LLM]
+    U --> V{Traducción OK?}
+    V -->|No| W[Notificar error]
+    W --> E
+    V -->|Sí| X[Enviar traducción\nal usuario]
+    X --> E
 
-    P -->|No, gracias| Q[Confirmar cancelación]
-    Q --> D
+    F -->|Voz o audio| Y{Usuario aprobado?}
+    Y -->|pending| Z[Informar que espere]
+    Y -->|rejected| AA[Informar denegación]
+    Y -->|no registrado| AB[Indicar que use /start]
+    Z --> E
+    AA --> E
+    AB --> E
 
-    P -->|Sí, traducir| R[Solicitar idioma destino]
-    R --> S[state = WAITING_LANGUAGE]
-    S --> D
+    Y -->|approved| AC{Tamaño\n<= 20MB?}
+    AC -->|No| AD[Rechazar con\ntamaño del archivo]
+    AD --> E
+    AC -->|Sí| AE[Descargar audio\ntemp_.oga]
+    AE --> AF[Enviar a\nGroq Whisper API]
+    AF --> AG{Transcripción OK?}
+    AG -->|No| AH[Notificar error]
+    AH --> AI[Eliminar archivo temporal]
+    AI --> E
+    AG -->|Sí| AJ[Enviar transcripción\nal usuario]
+    AJ --> AI
+    AJ --> AK[Preguntar si desea\ntraducir]
+    AK --> E
 
-    E -->|Texto libre| T{state ==\nWAITING_LANGUAGE?}
-    T -->|No| D
-    T -->|Sí| U[Leer idioma destino]
-    U --> V[Enviar a\nGroq LLM]
-    V --> W{Traducción OK?}
-    W -->|No| X[Notificar error\nal usuario]
-    X --> Y[state = None]
-    Y --> D
-    W -->|Sí| Z[Enviar traducción\nal usuario]
-    Z --> Y
+    F -->|Callback inline| AL{Tipo de callback}
+    AL -->|approve_ o reject_| AM{Es el admin?}
+    AM -->|No| AN[Rechazar acción]
+    AN --> E
+    AM -->|Sí| AO{Acción}
+    AO -->|approve| AP[user_status = approved\nNotificar al usuario]
+    AO -->|reject| AQ[user_status = rejected\nNotificar al usuario]
+    AP --> E
+    AQ --> E
+    AL -->|ask_translate| AR[state = WAITING_LANGUAGE\nPedir idioma]
+    AL -->|no_translate| AS[Confirmar cancelación\nstate = None]
+    AR --> E
+    AS --> E
 ```
 
 ---
 
 ## Gestión del estado de conversación
 
-El bot mantiene el estado de cada conversación en `context.user_data`. El único estado activo es `WAITING_LANGUAGE`, que indica que el bot está esperando que el usuario escriba el idioma de destino.
+El bot gestiona dos tipos de estado:
+
+1. **`user_status`** (global, en memoria): indica si el usuario está aprobado, pendiente o rechazado
+2. **`context.user_data["state"]`** (por conversación): indica en qué paso del flujo está el usuario
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle
+    [*] --> Nuevo
 
-    Idle --> Transcribiendo : Usuario envía audio
-    Transcribiendo --> Idle : Error de transcripción
+    Nuevo --> EsperandoNombre : /start (usuario desconocido)
+    EsperandoNombre --> EsperandoPendiente : Envía nombre válido
+    EsperandoPendiente --> Aprobado : Admin pulsa Aceptar
+    EsperandoPendiente --> Rechazado : Admin pulsa Rechazar
+
+    Aprobado --> Transcribiendo : Envía audio
+    Transcribiendo --> Aprobado : Error de transcripción
     Transcribiendo --> EsperandoDecision : Transcripción completada
 
-    EsperandoDecision --> Idle : Usuario pulsa "No, gracias"
-    EsperandoDecision --> EsperandoIdioma : Usuario pulsa "Sí, traducir"
+    EsperandoDecision --> Aprobado : Pulsa "No, gracias"
+    EsperandoDecision --> EsperandoIdioma : Pulsa "Sí, traducir"
 
-    EsperandoIdioma --> Traduciendo : Usuario escribe idioma
-    Traduciendo --> Idle : Traducción completada o error
+    EsperandoIdioma --> Traduciendo : Escribe idioma válido
+    Traduciendo --> Aprobado : Traducción completada o error
+
+    Rechazado --> [*]
 ```
 
 ---
