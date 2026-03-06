@@ -131,7 +131,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_status[target_user_id] = "approved"
             await context.bot.send_message(
                 chat_id=target_user_id,
-                text="✅ Tu acceso ha sido aprobado. ¡Ya puedes enviarme audios!",
+                text=(
+                    "✅ *Tu acceso ha sido aprobado.* ¡Ya puedes enviarme audios!\n\n"
+                    "Antes de empezar, ten en cuenta lo siguiente:\n\n"
+                    "🔹 Tus audios se envían a *Groq* (servidores en EEUU) para la transcripción. "
+                    "Se eliminan inmediatamente tras procesarse.\n"
+                    "🔹 No se almacena ningún dato de forma permanente.\n"
+                    "🔹 El servicio se ofrece sin garantías de disponibilidad ni de precisión.\n"
+                    "🔹 El límite de archivo es de 20MB por audio.\n\n"
+                    "📄 Puedes leer el disclaimer completo aquí:\n"
+                    "https://github.com/xreche/audio-transcriber-bot/blob/master/docs/disclaimer.md"
+                ),
+                parse_mode="Markdown",
             )
             await query.edit_message_text(f"✅ Acceso aprobado para {name}.")
         else:
